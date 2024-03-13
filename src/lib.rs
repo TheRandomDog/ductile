@@ -168,7 +168,9 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::ops::DerefMut;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -221,6 +223,7 @@ enum ChannelSenderInner<T> {
     /// The connection is with a remote party. The Arc<Mutex<>> is needed because TcpStream is not
     /// Clone and sending concurrently is not safe.
     Remote(Arc<Mutex<BufWriter<TcpStream>>>),
+    #[cfg(any(unix, doc))]
     /// The connection is with a unix socket.
     Unix(Arc<Mutex<BufWriter<UnixStream>>>),
     /// The connection is with a remote party, encrypted with ChaCha20.
@@ -244,6 +247,7 @@ enum ChannelReceiverInner<T> {
     Local(Receiver<ChannelMessage<T>>),
     /// The connection is with a remote party over a TCP socket.
     Remote(RefCell<BufReader<TcpStream>>),
+    #[cfg(any(unix, doc))]
     /// The connection is with a unix socket.
     Unix(RefCell<BufReader<UnixStream>>),
     /// The connection is with a remote party and it is encrypted using ChaCha20.
@@ -290,6 +294,7 @@ where
                 let stream = sender.deref_mut();
                 ChannelSender::<T>::send_remote_raw(stream, ChannelMessage::Message(data))
             }
+            #[cfg(unix)]
             ChannelSenderInner::Unix(stream) => {
                 let mut sender = stream.lock().unwrap();
                 let stream = sender.deref_mut();
@@ -333,6 +338,7 @@ where
                 stream.flush()?;
                 Ok(())
             }
+            #[cfg(unix)]
             ChannelSenderInner::Unix(sender) => {
                 let mut sender = sender.lock().expect("Cannot lock ChannelSender");
                 let stream = sender.deref_mut();
@@ -418,6 +424,7 @@ where
             ChannelSenderInner::Remote(r) => ChannelSender {
                 inner: ChannelSenderInner::Remote(r),
             },
+            #[cfg(unix)]
             ChannelSenderInner::Unix(r) => ChannelSender {
                 inner: ChannelSenderInner::Unix(r),
             },
@@ -449,6 +456,7 @@ where
         let message = match &self.inner {
             ChannelReceiverInner::Local(receiver) => receiver.recv()?,
             ChannelReceiverInner::Remote(receiver) => ChannelReceiver::recv_remote_raw(receiver)?,
+            #[cfg(unix)]
             ChannelReceiverInner::Unix(receiver) => ChannelReceiver::recv_unix_raw(receiver)?,
             ChannelReceiverInner::RemoteEnc(receiver) => {
                 let mut receiver = receiver.borrow_mut();
@@ -495,6 +503,7 @@ where
                     _ => panic!("Expected ChannelMessage::RawDataStart"),
                 }
             }
+            #[cfg(unix)]
             ChannelReceiverInner::Unix(receiver) => {
                 match ChannelReceiver::<T>::recv_unix_raw(receiver)? {
                     ChannelMessage::RawDataStart(len) => {
@@ -526,6 +535,7 @@ where
         Ok(bincode::deserialize_from(receiver.deref_mut())?)
     }
 
+    #[cfg(any(unix, doc))]
     /// Receive a message from the unix stream of a channel.
     fn recv_unix_raw(receiver: &RefCell<BufReader<UnixStream>>) -> Result<ChannelMessage<T>> {
         let mut receiver = receiver.borrow_mut();
@@ -585,6 +595,7 @@ where
             ChannelReceiverInner::Remote(r) => ChannelReceiver {
                 inner: ChannelReceiverInner::Remote(r),
             },
+            #[cfg(unix)]
             ChannelReceiverInner::Unix(r) => ChannelReceiver {
                 inner: ChannelReceiverInner::Unix(r),
             },
@@ -640,6 +651,7 @@ pub struct ChannelServer<S, R> {
 enum Listener {
     /// This listener is a TCP socket.
     Tcp(TcpListener),
+    #[cfg(any(unix, doc))]
     /// This listener is a unix socket.
     Unix(UnixListener),
 }
@@ -648,6 +660,7 @@ enum Listener {
 enum ClientSocket {
     /// The client is TCP.
     Tcp(TcpStream),
+    #[cfg(any(unix, doc))]
     /// The client is unix.
     Unix(UnixStream),
 }
@@ -661,6 +674,7 @@ impl Listener {
                     return Some(ClientSocket::Tcp(client));
                 }
             },
+            #[cfg(unix)]
             Self::Unix(unix) => loop {
                 if let Ok(client) = unix.incoming().next()? {
                     return Some(ClientSocket::Unix(client));
@@ -692,6 +706,7 @@ impl<S, R> ChannelServer<S, R> {
     pub fn local_addr(&self) -> Result<Option<SocketAddr>> {
         match &self.listener {
             Listener::Tcp(tcp) => Ok(Some(tcp.local_addr()?)),
+            #[cfg(unix)]
             Listener::Unix(_) => Ok(None),
         }
     }
@@ -727,6 +742,7 @@ impl<S, R> ChannelServer<S, R> {
         })
     }
 
+    #[cfg(any(unix, doc))]
     /// Bind a unix socket and create a new `ChannelServer`. This method does not support message encryption.
     ///
     /// ```
@@ -883,6 +899,7 @@ impl<S, R> Iterator for ChannelServer<S, R> {
                         ));
                     }
                 }
+                #[cfg(unix)]
                 ClientSocket::Unix(mut sender) => {
                     let mut receiver = sender.try_clone().expect("Failed to clone the stream");
                     if let Err(e) = check_no_encryption(&mut sender, &mut receiver) {
@@ -947,6 +964,7 @@ pub fn connect_channel<A: ToSocketAddrs, S, R>(
     ))
 }
 
+#[cfg(any(unix, doc))]
 /// Connect to a remote channel.
 ///
 /// All the remote channels are full-duplex, therefore this function returns a channel for sending
